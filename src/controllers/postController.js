@@ -7,6 +7,8 @@ const AUTHOR_FIELDS = 'displayName username avatarUrl';
  * Serializes a post for the client. If `post` is itself a repost wrapper
  * (post.repostOf is populated), the client is given the ORIGINAL post's id,
  * content, and stats — plus `repostedBy`/`repostedAt` describing the repost.
+ * The wrapper's own id is never exposed; clients always interact with the
+ * original post's id, whether liking, commenting, or reposting.
  */
 function serializePost(post, viewerLikedSet, viewerRepostedSet) {
   const isRepost = post.repostOf && typeof post.repostOf === 'object';
@@ -16,10 +18,8 @@ function serializePost(post, viewerLikedSet, viewerRepostedSet) {
   return {
     id: target._id,
     text: target.text,
-    // Return array of media objects, or backward-compatible single media values if present
-    media: target.media && target.media.length > 0 
-      ? target.media 
-      : (target.mediaUrl ? [{ mediaUrl: target.mediaUrl, mediaType: target.mediaType }] : []),
+    mediaUrl: target.mediaUrl,
+    mediaType: target.mediaType,
     likeCount: target.likeCount,
     commentCount: target.commentCount,
     repostCount: target.repostCount,
@@ -42,51 +42,20 @@ function serializePost(post, viewerLikedSet, viewerRepostedSet) {
 // POST /api/posts
 async function createPost(req, res) {
   try {
-    const { text } = req.body;
-    const files = req.files || [];
-
-    if ((!text || !text.trim()) && files.length === 0) {
-      return res.status(400).json({ message: 'Post text or media is required' });
+    const { text, mediaUrl, mediaType } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: 'Post text is required' });
     }
-
-    // Separate media into image and video groups
-    const images = files.filter((f) => f.mimetype.startsWith('image/'));
-    const videos = files.filter((f) => f.mimetype.startsWith('video/'));
-
-    // Count Caps Check
-    if (images.length > 100) {
-      return res.status(400).json({ message: 'Maximum 100 images allowed per post.' });
+    if (mediaType && !['none', 'image', 'video'].includes(mediaType)) {
+      return res.status(400).json({ message: 'Invalid mediaType' });
     }
-    if (videos.length > 10) {
-      return res.status(400).json({ message: 'Maximum 10 videos allowed per post.' });
-    }
-
-    // Byte Limits: 5 GB total for images, 10 GB total for videos
-    const FIVE_GB = 5 * 1024 * 1024 * 1024;
-    const TEN_GB = 10 * 1024 * 1024 * 1024;
-
-    const totalImgSize = images.reduce((sum, f) => sum + f.size, 0);
-    const totalVidSize = videos.reduce((sum, f) => sum + f.size, 0);
-
-    if (totalImgSize > FIVE_GB) {
-      return res.status(400).json({ message: 'Total image size exceeds 5 GB limit.' });
-    }
-    if (totalVidSize > TEN_GB) {
-      return res.status(400).json({ message: 'Total video size exceeds 10 GB limit.' });
-    }
-
-    // Structure media array for schema storage
-    const mediaItems = files.map((file) => ({
-      mediaUrl: `/uploads/${file.filename}`,
-      mediaType: file.mimetype.startsWith('video/') ? 'video' : 'image',
-    }));
 
     const post = await Post.create({
       author: req.user._id,
-      text: text ? text.trim() : '',
-      media: mediaItems,
+      text: text.trim(),
+      mediaUrl: mediaUrl || '',
+      mediaType: mediaUrl ? mediaType || 'image' : 'none',
     });
-
     await post.populate('author', AUTHOR_FIELDS);
 
     res.status(201).json({ post: serializePost(post) });

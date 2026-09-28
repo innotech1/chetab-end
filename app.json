@@ -4,6 +4,15 @@
       "eas": {
         "projectId": "fd731d15-73c8-447f-a42a-27644aa780d1"
       }
+    },
+    "android": {
+      "package": "com.trancentpressesionlimited.chetabackend"
+    },
+    "ios": {
+      "bundleIdentifier": "com.trancentpressesionlimited.chetabackend",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     }
   }
 }

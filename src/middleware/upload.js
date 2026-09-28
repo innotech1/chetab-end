@@ -1,10 +1,7 @@
 const multer = require('multer');
 const path = require('path');
-const crypto = require('crypto');
 
-const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
-
-const ALLOWED_TYPES = {
+const ALLOWED_MIME_TYPES = {
   'image/jpeg': 'image',
   'image/png': 'image',
   'image/gif': 'image',
@@ -14,29 +11,50 @@ const ALLOWED_TYPES = {
   'video/webm': 'video',
 };
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    const unique = crypto.randomBytes(16).toString('hex');
-    cb(null, `${Date.now()}-${unique}${ext}`);
-  },
-});
+// Fallback by file extension, used whenever the client didn't send a
+// specific mimetype (some mobile FormData implementations send a generic
+// 'application/octet-stream' instead of the real type — this has already
+// changed once due to an Expo SDK update, so don't rely on mimetype alone).
+const ALLOWED_EXTENSIONS = {
+  '.jpg': 'image',
+  '.jpeg': 'image',
+  '.png': 'image',
+  '.gif': 'image',
+  '.webp': 'image',
+  '.mp4': 'video',
+  '.mov': 'video',
+  '.webm': 'video',
+};
+
+function detectMediaType(file) {
+  const byMimetype = ALLOWED_MIME_TYPES[file.mimetype];
+  if (byMimetype) return byMimetype;
+
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  return ALLOWED_EXTENSIONS[ext] || null;
+}
+
+// Memory storage, not disk: the file buffer goes straight to Cloudinary
+// (see mediaController.js) rather than being saved locally. Render's free
+// tier has an ephemeral filesystem — anything written to local disk can
+// vanish whenever the instance spins down and back up, which is exactly
+// what was causing uploaded media to disappear.
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
   // Generous enough for a short video clip; images will be far under this.
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (!ALLOWED_TYPES[file.mimetype]) {
+    const mediaType = detectMediaType(file);
+    if (!mediaType) {
       return cb(new Error('Unsupported file type. Use JPEG/PNG/GIF/WebP images or MP4/MOV/WebM videos.'));
     }
+    // Stash it on the file object so the controller doesn't have to
+    // re-derive it (and so it stays consistent with what the filter decided).
+    file.detectedMediaType = mediaType;
     cb(null, true);
   },
 });
 
-function mediaTypeFromMimetype(mimetype) {
-  return ALLOWED_TYPES[mimetype] || 'none';
-}
-
-module.exports = { upload, mediaTypeFromMimetype, UPLOADS_DIR };
+module.exports = { upload };

@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const path = require('path');
 const connectDB = require('./src/config/db');
 const initSocket = require('./src/socket');
 
@@ -16,6 +15,7 @@ const searchRoutes = require('./src/routes/searchRoutes');
 const conversationRoutes = require('./src/routes/conversationRoutes');
 const mediaRoutes = require('./src/routes/mediaRoutes');
 const videoRoutes = require('./src/routes/videoRoutes');
+const listingRoutes = require('./src/routes/listingRoutes');
 
 const app = express();
 // Socket.io needs a raw http.Server to attach to — express's app.listen()
@@ -27,10 +27,6 @@ app.set('io', io);
 
 app.use(cors());
 app.use(express.json());
-
-// Serves uploaded images/videos as static files at e.g.
-// http://<host>:5000/uploads/<filename>
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/', (req, res) => res.json({ status: 'Chetá API is running' }));
 
@@ -44,6 +40,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/videos', videoRoutes);
+app.use('/api/listings', listingRoutes);
 
 // 404 handler
 app.use((req, res) => {

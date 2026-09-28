@@ -24,8 +24,6 @@ function serializeMessage(msg) {
     id: msg._id,
     conversationId: msg.conversation,
     text: msg.text,
-    mediaUrl: msg.mediaUrl || '',
-    mediaType: msg.mediaType || 'none',
     createdAt: msg.createdAt,
     sender: msg.sender && {
       id: msg.sender._id,
@@ -52,6 +50,7 @@ async function getConversations(req, res) {
 }
 
 // POST /api/conversations   body: { username }
+// Returns the existing conversation with that user, or creates a new one.
 async function getOrCreateConversation(req, res) {
   try {
     const { username } = req.body;
@@ -68,7 +67,7 @@ async function getOrCreateConversation(req, res) {
     }
 
     let conversation = await Conversation.findOne({
-      participants: { $all: [req.user._id, other._id],$size: 2 },
+      participants: { $all: [req.user._id, other._id], $size: 2 },
     }).populate('participants', AUTHOR_FIELDS);
 
     if (!conversation) {
@@ -106,6 +105,7 @@ async function getMessages(req, res) {
       .populate('sender', AUTHOR_FIELDS);
 
     res.json({
+      // Reversed so the client receives oldest-first, ready to render top-to-bottom
       messages: messages.map(serializeMessage).reverse(),
       page,
       hasMore: messages.length === limit,
@@ -115,14 +115,12 @@ async function getMessages(req, res) {
   }
 }
 
-// POST /api/conversations/:id/messages   (Supports FormData: text + media file)
+// POST /api/conversations/:id/messages   body: { text }
 async function sendMessage(req, res) {
   try {
     const { text } = req.body;
-    const file = req.file;
-
-    if ((!text || !text.trim()) && !file) {
-      return res.status(400).json({ message: 'Message text or media is required' });
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: 'Message text is required' });
     }
 
     const conversation = await Conversation.findById(req.params.id);
@@ -133,36 +131,22 @@ async function sendMessage(req, res) {
       return res.status(403).json({ message: 'Not a participant in this conversation' });
     }
 
-    let mediaUrl = '';
-    let mediaType = 'none';
-
-    if (file) {
-      mediaUrl = `/uploads/${file.filename}`;
-      mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
-    }
-
-    const messageText = text ? text.trim() : '';
-
     const message = await Message.create({
       conversation: conversation._id,
       sender: req.user._id,
-      text: messageText,
-      mediaUrl,
-      mediaType,
+      text: text.trim(),
     });
-
     await message.populate('sender', AUTHOR_FIELDS);
 
-    // Dynamic preview label for inbox list when sending pure media
-    const previewText = messageText || (mediaType === 'video' ? '📹 Video' : '📷 Photo');
-
-    conversation.lastMessageText = previewText;
+    conversation.lastMessageText = text.trim();
     conversation.lastMessageAt = message.createdAt;
     await conversation.save();
 
     const serialized = serializeMessage(message);
 
-    // Real-time socket dispatch to recipient room
+    // Push to the other participant's room in real time. The sender gets
+    // their own copy back as this request's HTTP response, so no need to
+    // also emit to themselves.
     const io = req.app.get('io');
     const recipientId = conversation.participants.find(
       (p) => String(p) !== String(req.user._id)
