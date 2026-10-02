@@ -16,6 +16,7 @@ const conversationRoutes = require('./src/routes/conversationRoutes');
 const mediaRoutes = require('./src/routes/mediaRoutes');
 const videoRoutes = require('./src/routes/videoRoutes');
 const listingRoutes = require('./src/routes/listingRoutes');
+const callRoutes = require('./src/routes/callRoutes');
 
 const app = express();
 // Socket.io needs a raw http.Server to attach to — express's app.listen()
@@ -41,6 +42,7 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/listings', listingRoutes);
+app.use('/api/call', callRoutes);
 
 // 404 handler
 app.use((req, res) => {
