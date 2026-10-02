@@ -1,6 +1,7 @@
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const User = require('../models/User');
+const cloudinary = require('../config/cloudinary');
 
 const AUTHOR_FIELDS = 'displayName username avatarUrl';
 
@@ -25,6 +26,10 @@ function serializeMessage(msg) {
     conversationId: msg.conversation,
     text: msg.text,
     createdAt: msg.createdAt,
+    media: (msg.media || []).map((m) => ({
+      mediaUrl: m.mediaUrl,
+      mediaType: m.mediaType,
+    })),
     sender: msg.sender && {
       id: msg.sender._id,
       displayName: msg.sender.displayName,
@@ -32,6 +37,16 @@ function serializeMessage(msg) {
       avatarUrl: msg.sender.avatarUrl,
     },
   };
+}
+
+function uploadBufferToCloudinary(buffer, resourceType) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: resourceType, folder: 'cheta/messages' },
+      (err, result) => (err ? reject(err) : resolve(result))
+    );
+    stream.end(buffer);
+  });
 }
 
 // GET /api/conversations
@@ -50,7 +65,6 @@ async function getConversations(req, res) {
 }
 
 // POST /api/conversations   body: { username }
-// Returns the existing conversation with that user, or creates a new one.
 async function getOrCreateConversation(req, res) {
   try {
     const { username } = req.body;
@@ -105,7 +119,6 @@ async function getMessages(req, res) {
       .populate('sender', AUTHOR_FIELDS);
 
     res.json({
-      // Reversed so the client receives oldest-first, ready to render top-to-bottom
       messages: messages.map(serializeMessage).reverse(),
       page,
       hasMore: messages.length === limit,
@@ -115,12 +128,14 @@ async function getMessages(req, res) {
   }
 }
 
-// POST /api/conversations/:id/messages   body: { text }
+// POST /api/conversations/:id/messages   multipart/form-data { text, media[] }
 async function sendMessage(req, res) {
   try {
-    const { text } = req.body;
-    if (!text || !text.trim()) {
-      return res.status(400).json({ message: 'Message text is required' });
+    const text = (req.body.text || '').trim();
+    const files = req.files || [];
+
+    if (!text && files.length === 0) {
+      return res.status(400).json({ message: 'Message must contain text or media' });
     }
 
     const conversation = await Conversation.findById(req.params.id);
@@ -131,22 +146,41 @@ async function sendMessage(req, res) {
       return res.status(403).json({ message: 'Not a participant in this conversation' });
     }
 
+    // Upload each file to Cloudinary
+    const media = [];
+    for (const file of files) {
+      const resourceType = file.detectedMediaType === 'video' ? 'video' : 'image';
+      try {
+        const result = await uploadBufferToCloudinary(file.buffer, resourceType);
+        media.push({
+          mediaUrl: result.secure_url,
+          mediaType: resourceType,
+        });
+      } catch (uploadErr) {
+        console.error('Cloudinary upload failed for one message file:', uploadErr);
+        return res.status(500).json({
+          message: 'Could not upload media',
+          error: uploadErr.message,
+        });
+      }
+    }
+
     const message = await Message.create({
       conversation: conversation._id,
       sender: req.user._id,
-      text: text.trim(),
+      text,
+      media,
     });
     await message.populate('sender', AUTHOR_FIELDS);
 
-    conversation.lastMessageText = text.trim();
+    // Update conversation preview text
+    const previewText = text || (media.length ? `📎 ${media.length} attachment${media.length > 1 ? 's' : ''}` : '');
+    conversation.lastMessageText = previewText;
     conversation.lastMessageAt = message.createdAt;
     await conversation.save();
 
     const serialized = serializeMessage(message);
 
-    // Push to the other participant's room in real time. The sender gets
-    // their own copy back as this request's HTTP response, so no need to
-    // also emit to themselves.
     const io = req.app.get('io');
     const recipientId = conversation.participants.find(
       (p) => String(p) !== String(req.user._id)
@@ -157,6 +191,7 @@ async function sendMessage(req, res) {
 
     res.status(201).json({ message: serialized });
   } catch (err) {
+    console.error('sendMessage error:', err);
     res.status(500).json({ message: 'Could not send message', error: err.message });
   }
 }
